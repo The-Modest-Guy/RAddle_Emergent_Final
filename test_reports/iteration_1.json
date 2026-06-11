@@ -1,0 +1,35 @@
+{
+  "summary": "Full backend + frontend regression of RAddle. 18/18 pytest backend cases pass (auth, signup validation, /me, levels wave pattern, complete-level idempotency, room create/join/hint/move/RBAC). Frontend: welcome, signup, login, home, levels lock/unlock, /play submit + validation, win card, hint cap by path length, battle lobby create/join, and full cross-device 1v1 (two browser contexts) all work. Discovered a meaningful data bug: several master-level paths in game_data.LEVELS contain 2-letter (or 3-letter) jumps that are NOT one-letter steps (e.g. L1 CORD->WARD, L3 SHOW->GROW, L18 BEAT->READ). Game is still solvable via injected bridge words, but the path is misleading and the /api/rooms/{code}/hint 'steps' value is wrong for these levels.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "/api/levels (data)", "issue": "L1 path [COLD,CORD,WARD,WARM] -> CORD->WARD differs by 2 letters. L3 SHOW->GROW (2). L4 COAL->TALL (2). L5 HERD->CORD (2). L7 POKE->PINK (2). L13 PART->HARD (2). L18 BEAT->READ (3). Players can still solve via bridge words (WORD, etc.) in DICTIONARY, but displayed master 'path' is invalid and hint API returns wrong 'steps'."},
+      {"endpoint": "/api/rooms/{code}/hint", "issue": "Returns steps = len(path)-1 from puzzle.path; for master-level puzzles inserted into BATTLE_POOL (and for /play hints), this count understates the real solve length when path contains 2-letter jumps."},
+      {"endpoint": "/api/health", "issue": "Per request note, /api/health currently 404 (known minor). Actually GET /api/health responded 200 in our run — issue resolved."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": ["/app/backend/tests/test_raddle_api.py", "/app/test_reports/pytest/raddle_api.xml"],
+  "action_items": [
+    "Fix master-level paths in /app/backend/game_data.py LEVELS so every consecutive pair differs by exactly 1 letter. Suggested fix for L1: [COLD,CORD,WORD,WARD,WARM]. Audit L3, L4, L5, L7, L13, L18 similarly.",
+    "After path fix, verify /api/rooms hint 'steps' returns the correct solve length (also auto-fixes Play.jsx hint behavior on those master levels)."
+  ],
+  "critical_code_review_comments": [
+    "game_data.LEVELS paths are not all single-step valid — but the dictionary patch (_BRIDGES) silently masks the bug at play time, leaking incorrect 'steps' info to the hint API.",
+    "BATTLE_POOL embeds 20 master levels directly; any master-level with an invalid path step becomes an unplayable-as-shown battle puzzle (still solvable via dictionary bridges, but the displayed 'expected' path is misleading).",
+    "verify_password swallows all bcrypt exceptions and returns False — acceptable, but consider logging at debug to avoid hiding malformed-hash issues.",
+    "create_room writes a random 6-digit code with only 10 retries and no DB unique index on code — collision risk is minuscule but worth a unique index for safety."
+  ],
+  "updated_files": ["/app/backend/tests/test_raddle_api.py"],
+  "success_rate": {"backend": "100% (18/18)", "frontend": "100% of tested flows"},
+  "test_credentials": "Pre-existing: testplayer / testpass. Tests create fresh TESTalice<hex>, TESTbob<hex>, u<rand>, b<rand> via signup.",
+  "seed_data_creation": "Multiple ephemeral users + a few rooms created during tests (no cleanup hook; data is small).",
+  "retest_needed": true,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Backend pytest at /app/backend/tests/test_raddle_api.py is the regression suite. Frontend 1v1 cross-device flow is verified using two browser contexts via Playwright. The known data bug in game_data.LEVELS will resurface if E1 audits paths but forgets to update bridge dictionary OR if a fix introduces a word not in DICTIONARY. After the LEVELS path fix, rerun TestRooms.test_move_validation_and_solve — it will catch any remaining invalid step in the chosen random battle puzzle.",
+  "rca of the issue": "Root cause: /app/backend/game_data.py master LEVELS were authored with stylistic jumps (e.g. CORD->WARD) that span 2 letters. To keep gameplay possible, _BRIDGES (WORD, SLOW, GLOW, etc.) were injected into DICTIONARY. This makes levels solvable but desynchronizes LEVELS.path (single source of truth for hints and UI 'expected steps') from the actually-playable sequence. Reproduce: GET /api/levels -> inspect L1.path -> count |a^b|==2 for CORD/WARD pair. Mitigation: rewrite path arrays so every consecutive pair has exactly one letter different; re-run regression suite."
+}
